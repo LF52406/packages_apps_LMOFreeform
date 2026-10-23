@@ -12,12 +12,12 @@ data class FreeformConfig @JvmOverloads constructor(
     var hangUpWidth: Int = 300,
     var hangUpHeight: Int = 400,
     var isHangUp: Boolean = false,
-    // 记录挂起前的位置，以便恢复
+    // Saved centered window position for restoring the mini window
     var notInHangUpX: Int = 0,
     var notInHangUpY: Int = 0,
-    //小窗屏幕宽高，与view的比例
+    // Logical freeform display size relative to the rendered content
     var freeformWidth: Int = 1080,
     var freeformHeight: Int = 1920,
-    //小窗屏幕尺寸/小窗界面尺寸
+    // Logical display pixels per visible content pixel
     var scale: Float = 1.0f
 )

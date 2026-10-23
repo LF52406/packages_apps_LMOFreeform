@@ -6,39 +6,70 @@ import android.util.Slog
 import android.view.Display
 import android.view.GestureDetector.SimpleOnGestureListener
 import android.view.MotionEvent
+import android.view.VelocityTracker
 import android.view.View
+import kotlin.math.abs
 import com.libremobileos.freeform.server.LMOFreeformServiceHolder
 import com.libremobileos.freeform.server.SystemServiceHolder
-import kotlin.math.max
 import kotlin.math.roundToInt
 
 class MoveTouchListener(
-    private val window: FreeformWindow
-) : View.OnTouchListener{
-    private var startX = 0.0f
-    private var startY = 0.0f
+    private val window: FreeformWindow,
+) : View.OnTouchListener {
+    private var lastX = 0f
+    private var lastY = 0f
+    private var velocityTracker: VelocityTracker? = null
+
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouch(v: View, event: MotionEvent): Boolean {
-        val layout = window.freeformLayout ?: return true
-        
-        when (event.action) {
+        val layout = window.freeformLayout ?: return false
+        when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                startX = event.rawX
-                startY = event.rawY
+                velocityTracker?.recycle()
+                velocityTracker = VelocityTracker.obtain().also { it.addMovement(event) }
+                lastX = event.rawX
+                lastY = event.rawY
+                return true
             }
             MotionEvent.ACTION_MOVE -> {
-                window.windowManager.updateViewLayout(layout, window.windowParams.apply {
-                    x = (x + event.rawX - startX).roundToInt()
-                    y = (y + event.rawY - startY).roundToInt()
-                })
-                startX = event.rawX
-                startY = event.rawY
+                val dx = event.rawX - lastX
+                val dy = event.rawY - lastY
+                if (!dx.isFinite() || !dy.isFinite()) return true
+                velocityTracker?.addMovement(event)
+                window.windowParams.apply {
+                    x = (x + dx).roundToInt()
+                    y = (y + dy).roundToInt()
+                }
+                window.windowManager.updateViewLayout(layout, window.windowParams)
+                lastX = event.rawX
+                lastY = event.rawY
+                return true
             }
             MotionEvent.ACTION_UP -> {
+                velocityTracker?.addMovement(event)
+                velocityTracker?.computeCurrentVelocity(1000)
+                val vx = velocityTracker?.xVelocity ?: 0f
+                val density = window.context.resources.displayMetrics.density
+                val size = window.freeformConfig
+                val edge = (window.defaultDisplayWidth - size.width) / 2
+                val nearEdge = abs(window.windowParams.x) >= edge - 36 * density
+                val flickToSide = nearEdge && abs(vx) >= 850f * density &&
+                    vx * window.windowParams.x > 0
+                velocityTracker?.recycle()
+                velocityTracker = null
+                if (flickToSide) window.handleHangUp()
+                else window.makeSureFreeformInScreen()
+                v.performClick()
+                return true
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                velocityTracker?.recycle()
+                velocityTracker = null
                 window.makeSureFreeformInScreen()
+                return true
             }
         }
-        return true
+        return false
     }
 }
 
@@ -85,58 +116,75 @@ class RightViewClickListener(private val displayId: Int) : View.OnClickListener 
     }
 }
 
-class ScaleTouchListener(private val window: FreeformWindow, private val isRight: Boolean = true): View.OnTouchListener {
-    private var startX = 0.0f
-    private var startY = 0.0f
+class ScaleTouchListener(
+    private val window: FreeformWindow,
+    private val isRight: Boolean = true,
+) : View.OnTouchListener {
+    private var startRawX = 0f
+    private var startRawY = 0f
+    private var startX = 0
+    private var startY = 0
+    private var startSize = FreeformGeometry.Size(1, 1)
+    private var pendingSize = startSize
+
     @SuppressLint("ClickableViewAccessibility")
     override fun onTouch(v: View, event: MotionEvent): Boolean {
-        val rootView = window.freeformRootView ?: return true
-        val veilView = window.veilView ?: return true
-        val freeformView = window.freeformView ?: return true
-        
-        when (event.action) {
+        val root = window.freeformRootView ?: return false
+        if (window.freeformConfig.isHangUp) return false
+        when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                startX = event.rawX
-                startY = event.rawY
-                rootView.visibility = View.INVISIBLE
-                veilView.visibility = View.VISIBLE
+                startRawX = event.rawX
+                startRawY = event.rawY
+                startX = window.windowParams.x
+                startY = window.windowParams.y
+                startSize = FreeformGeometry.Size(
+                    window.freeformConfig.width, window.freeformConfig.height
+                )
+                pendingSize = startSize
+                return true
             }
             MotionEvent.ACTION_MOVE -> {
-                rootView.layoutParams = rootView.layoutParams.apply {
-                    val xDelta = if (isRight) (event.rawX - startX) else (startX - event.rawX)
-                    val yDelta = event.rawY - startY
-                    width = max(25, (rootView.width + xDelta).roundToInt())
-                    height = max(25, (rootView.height + yDelta).roundToInt())
-                    if (width > height) {
-                        if (xDelta < 0) width = height
-                        else height = width
-                    }
+                val dx = event.rawX - startRawX
+                val dy = event.rawY - startRawY
+                if (!dx.isFinite() || !dy.isFinite()) return true
+                val size = FreeformGeometry.resize(
+                    startSize, dx, dy, isRight,
+                    window.defaultDisplayWidth, window.defaultDisplayHeight,
+                    window.context.resources.displayMetrics.density.coerceAtLeast(0.1f)
+                )
+                pendingSize = size
+                root.layoutParams = root.layoutParams.apply {
+                    width = size.width
+                    height = size.height
                 }
-                startX = event.rawX
-                startY = event.rawY
+                // Anchor the opposite edge instead of growing around the center.
+                val shift = (size.width - startSize.width) / 2
+                window.windowParams.x = startX + if (isRight) shift else -shift
+                window.windowParams.y = startY + (size.height - startSize.height) / 2
+                window.freeformLayout?.let {
+                    window.windowManager.updateViewLayout(it, window.windowParams)
+                }
+                return true
             }
             MotionEvent.ACTION_UP -> {
-                freeformView.surfaceTexture?.let { surfaceTexture ->
-                    window.freeformConfig.width = rootView.layoutParams.width
-                    window.freeformConfig.height = rootView.layoutParams.height
-                    window.handler.post { window.makeSureFreeformInScreen() }
-                    window.measureScale()
-                    LMOFreeformServiceHolder.resizeFreeform(
-                        window,
-                        window.freeformConfig.freeformWidth,
-                        window.freeformConfig.freeformHeight,
-                        window.freeformConfig.densityDpi
-                    )
-                    surfaceTexture.setDefaultBufferSize(window.freeformConfig.freeformWidth, window.freeformConfig.freeformHeight)
-                    // Delay the unveiling until after the scaling is complete
-                    window.handler.postDelayed({
-                        rootView.visibility = View.VISIBLE
-                        veilView.visibility = View.GONE
-                    }, 250)
+                window.finishResize(pendingSize)
+                v.performClick()
+                return true
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                root.layoutParams = root.layoutParams.apply {
+                    width = startSize.width
+                    height = startSize.height
                 }
+                window.windowParams.x = startX
+                window.windowParams.y = startY
+                window.freeformLayout?.let {
+                    window.windowManager.updateViewLayout(it, window.windowParams)
+                }
+                return true
             }
         }
-        return true
+        return false
     }
 }
 
