@@ -446,23 +446,33 @@ class FreeformWindow(
     }
 
     /**
+     * Keep the decorated window within the display throughout move/resize gestures,
+     * not just when the user lifts their finger. Coordinates are Gravity.CENTER offsets.
+     * The dimensions are the displayed texture dimensions, not the virtual display size.
+     */
+    internal fun clampWindowPosition(
+        width: Int = if (freeformConfig.isHangUp) freeformConfig.hangUpWidth
+                     else freeformConfig.width,
+        height: Int = if (freeformConfig.isHangUp) freeformConfig.hangUpHeight
+                      else freeformConfig.height,
+    ): Boolean {
+        val bars = if (freeformConfig.isHangUp) 0 else dp(54)
+        val pos = FreeformGeometry.clampCenter(
+            windowParams.x, windowParams.y, width, height + bars,
+            defaultDisplayWidth, defaultDisplayHeight, displayDensity
+        )
+        if (pos.x == windowParams.x && pos.y == windowParams.y) return false
+        windowParams.x = pos.x
+        windowParams.y = pos.y
+        return true
+    }
+
+    /**
      * Called in uiHandler
      */
     fun makeSureFreeformInScreen() {
         val layout = freeformLayout ?: return
-        val size = if (freeformConfig.isHangUp) {
-            FreeformGeometry.Size(freeformConfig.hangUpWidth, freeformConfig.hangUpHeight)
-        } else {
-            FreeformGeometry.Size(freeformConfig.width, freeformConfig.height)
-        }
-        val bars = if (freeformConfig.isHangUp) 0 else dp(54)
-        val pos = FreeformGeometry.clampCenter(
-            windowParams.x, windowParams.y, size.width, size.height + bars,
-            defaultDisplayWidth, defaultDisplayHeight, displayDensity
-        )
-        if (pos.x != windowParams.x || pos.y != windowParams.y) {
-            windowParams.x = pos.x
-            windowParams.y = pos.y
+        if (clampWindowPosition()) {
             runCatching { windowManager.updateViewLayout(layout, windowParams) }
                 .onFailure { Slog.e(TAG, "clamp freeform failed", it) }
         }

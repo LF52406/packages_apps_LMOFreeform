@@ -40,6 +40,7 @@ class MoveTouchListener(
                     x = (x + dx).roundToInt()
                     y = (y + dy).roundToInt()
                 }
+                window.clampWindowPosition()
                 window.windowManager.updateViewLayout(layout, window.windowParams)
                 lastX = event.rawX
                 lastY = event.rawY
@@ -161,6 +162,7 @@ class ScaleTouchListener(
                 val shift = (size.width - startSize.width) / 2
                 window.windowParams.x = startX + if (isRight) shift else -shift
                 window.windowParams.y = startY + (size.height - startSize.height) / 2
+                window.clampWindowPosition(size.width, size.height)
                 window.freeformLayout?.let {
                     window.windowManager.updateViewLayout(it, window.windowParams)
                 }
@@ -226,10 +228,12 @@ class HangUpGestureListener(private val window: FreeformWindow) : SimpleOnGestur
         try {
             window.handler.post {
                 val layout = window.freeformLayout ?: return@post
-                window.windowManager.updateViewLayout(layout, window.windowParams.apply {
+                window.windowParams.apply {
                     x = newX
                     y = newY
-                })
+                }
+                window.clampWindowPosition()
+                window.windowManager.updateViewLayout(layout, window.windowParams)
             }
         } catch (e: Exception) {}
         return true

@@ -42,6 +42,29 @@ class FreeformGeometryTest {
         assertTrue(pos.y > -1600)
     }
 
+    @Test fun dragAndResizeStayInsideDisplayBounds() {
+        for ((w, h) in listOf(1440 to 3200, 3200 to 1440, 1080 to 2400)) {
+            val density = 3f
+            val origin = FreeformGeometry.initial(w, h, density)
+            for ((dx, dy) in listOf(
+                20000 to 20000, -20000 to -20000, 0 to 0,
+                1000 to -1000
+            )) {
+                val grown = FreeformGeometry.resize(
+                    origin, dx.toFloat(), dy.toFloat(), true, w, h, density
+                )
+                val clamped = FreeformGeometry.clampCenter(
+                    dx, dy, grown.width, grown.height + (54f * density).toInt(),
+                    w, h, density
+                )
+                val xRange = ((w - grown.width) / 2 - (10f * density).toInt()).coerceAtLeast(0)
+                assertTrue(kotlin.math.abs(clamped.x) <= xRange)
+                assertTrue(grown.width <= FreeformGeometry.limits(w, h, density).width)
+                assertTrue(grown.height <= FreeformGeometry.limits(w, h, density).height)
+            }
+        }
+    }
+
     @Test fun miniKeepsContentAspectWithoutFixedPixels() {
         val size = FreeformGeometry.mini(FreeformGeometry.Size(900, 1500), 1440, 3200, 3f)
         assertTrue(size.width > 300)

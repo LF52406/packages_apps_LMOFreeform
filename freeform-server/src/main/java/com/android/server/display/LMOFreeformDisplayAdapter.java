@@ -179,13 +179,16 @@ public class LMOFreeformDisplayAdapter extends DisplayAdapter {
 
         public void resizeLocked(int width, int height, int densityDpi) {
             if (mWidth != width || mHeight != height || mDensityDpi != densityDpi) {
-                sendDisplayDeviceEventLocked(this, DISPLAY_DEVICE_EVENT_CHANGED);
-                sendTraversalRequestLocked();
+                // Publish the new geometry before notifying DisplayManager.
                 mWidth = width;
                 mHeight = height;
                 mMode = createMode(width, height, mRefreshRate);
                 mDensityDpi = densityDpi;
                 mInfo = null;
+                // configureDisplaySizeLocked() only sends setDisplaySize when this bit is set.
+                mPendingChanges |= PENDING_RESIZE;
+                sendDisplayDeviceEventLocked(this, DISPLAY_DEVICE_EVENT_CHANGED);
+                sendTraversalRequestLocked();
             }
         }
 
