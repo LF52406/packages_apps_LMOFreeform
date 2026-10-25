@@ -3,7 +3,8 @@
     xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
-    app:cardCornerRadius="16dp"
+    app:cardCornerRadius="18dp"
+    app:cardElevation="12dp"
     app:cardBackgroundColor="@color/color_surface">
 
     <androidx.constraintlayout.widget.ConstraintLayout
@@ -15,29 +16,41 @@
             android:tag="topBarView"
             android:layout_width="0dp"
             android:layout_height="@dimen/top_bar_height"
-            android:background="@drawable/color_background"
+            android:background="@android:color/transparent"
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toTopOf="parent">
+            <!-- A centered grip retains the existing accessible title and controls. -->
+            <View
+                android:layout_width="36dp"
+                android:layout_height="4dp"
+                android:layout_marginTop="7dp"
+                android:alpha="0.55"
+                android:background="@drawable/bar_corners_bg"
+                app:layout_constraintTop_toTopOf="parent"
+                app:layout_constraintStart_toStartOf="parent"
+                app:layout_constraintEnd_toEndOf="parent" />
             <ImageView
                 android:id="@+id/appIcon"
                 android:layout_width="24dp"
-                android:layout_height="16dp"
-                android:layout_marginStart="6dp"
+                android:layout_height="24dp"
+                android:layout_marginStart="8dp"
                 android:tag="appIcon"
+                android:visibility="gone"
                 app:layout_constraintStart_toStartOf="parent"
                 app:layout_constraintTop_toTopOf="parent"
                 app:layout_constraintBottom_toBottomOf="parent" />
             <TextView
                 android:id="@+id/packageName"
                 android:tag="packageName"
+                android:visibility="gone"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_marginStart="2dp"
                 android:layout_marginEnd="6dp"
                 android:ellipsize="end"
                 android:maxLines="1"
-                android:textSize="11sp"
+                android:textSize="12sp"
                 android:textColor="@color/color_text"
                 app:layout_constraintStart_toEndOf="@id/appIcon"
                 app:layout_constraintEnd_toStartOf="@id/pinView"
@@ -58,6 +71,7 @@
                 android:layout_height="16dp"
                 android:layout_marginEnd="6dp"
                 android:tag="pinView"
+                android:visibility="gone"
                 android:src="@drawable/ic_pin"
                 app:layout_constraintEnd_toStartOf="@id/maximizeView"
                 app:layout_constraintTop_toTopOf="parent"
@@ -68,6 +82,7 @@
                 android:layout_height="16dp"
                 android:layout_marginEnd="6dp"
                 android:tag="maximizeView"
+                android:visibility="gone"
                 android:src="@drawable/ic_maximize"
                 app:layout_constraintEnd_toStartOf="@id/minimizeView"
                 app:layout_constraintTop_toTopOf="parent"
@@ -78,6 +93,7 @@
                 android:layout_height="16dp"
                 android:layout_marginEnd="6dp"
                 android:tag="minimizeView"
+                android:visibility="gone"
                 android:src="@drawable/ic_minimize"
                 app:layout_constraintEnd_toEndOf="parent"
                 app:layout_constraintTop_toTopOf="parent"
@@ -116,7 +132,7 @@
             android:id="@+id/bottomBar"
             android:layout_width="0dp"
             android:layout_height="@dimen/bottom_bar_height"
-            android:background="@drawable/color_background"
+            android:background="@android:color/transparent"
             android:gravity="center"
             android:tag="bottomBarView"
             app:layout_constraintBottom_toBottomOf="parent"
@@ -135,8 +151,9 @@
                 app:layout_constraintTop_toTopOf="parent">
 
                 <View
-                    android:layout_width="4dp"
-                    android:layout_height="4dp"
+                    android:layout_width="12dp"
+                    android:layout_height="3dp"
+                    android:alpha="0.55"
                     android:background="@drawable/bar_corners_bg"
                     android:tag="leftScale" />
             </LinearLayout>
@@ -171,8 +188,9 @@
                 app:layout_constraintTop_toTopOf="parent">
 
                 <View
-                    android:layout_width="4dp"
-                    android:layout_height="4dp"
+                    android:layout_width="12dp"
+                    android:layout_height="3dp"
+                    android:alpha="0.55"
                     android:background="@drawable/bar_corners_bg"
                     android:tag="rightScale" />
             </LinearLayout>
