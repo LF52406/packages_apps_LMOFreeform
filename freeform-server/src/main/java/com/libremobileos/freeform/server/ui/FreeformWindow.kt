@@ -9,6 +9,7 @@ import android.os.Build
 import android.os.Handler
 import android.util.Slog
 import android.view.Display
+import android.view.Gravity
 import android.view.DisplayInfo
 import android.graphics.Matrix
 import android.view.InputDevice
@@ -51,6 +52,10 @@ class FreeformWindow(
     var freeformView: TextureView? = null
     private var topBarView: View? = null
     private var bottomBarView: View? = null
+    private var headerControls: List<View> = emptyList()
+    private var headerControlsExpanded = false
+    internal var isEdgeStashed = false
+        private set
     var veilView: ViewGroup? = null
     private var displayId = Display.INVALID_DISPLAY
     var defaultDisplayWidth = context.resources.displayMetrics.widthPixels
@@ -59,6 +64,8 @@ class FreeformWindow(
     private val hangUpGestureListener = HangUpGestureListener(this)
     private val defaultDisplayInfo = DisplayInfo()
     private val destroyRunnable = Runnable { destroy("destroyRunnable", true) }
+    private val displayDensity get() = context.resources.displayMetrics.density.coerceAtLeast(0.1f)
+    private fun dp(value: Int) = (value * displayDensity).roundToInt()
     
     private var appPackageName: String = ""
     private var appIcon: Drawable? = null
@@ -67,26 +74,27 @@ class FreeformWindow(
     private val rotationWatcher = object : IRotationWatcher.Stub() {
         override fun onRotationChanged(rotation: Int) {
             dlog(TAG, "onRotationChanged($rotation)")
-            defaultDisplayWidth = context.resources.displayMetrics.widthPixels
-            defaultDisplayHeight = context.resources.displayMetrics.heightPixels
-            defaultDisplayRotation = context.display.rotation
-            measureSize()
             handler.post {
+                defaultDisplayWidth = context.resources.displayMetrics.widthPixels
+                defaultDisplayHeight = context.resources.displayMetrics.heightPixels
+                defaultDisplayRotation = rotation
+                // Retain the user's aspect ratio and size; only scale down if the
+                // new physical display cannot contain the window.
+                val size = FreeformGeometry.fit(
+                    FreeformGeometry.Size(freeformConfig.width, freeformConfig.height),
+                    defaultDisplayWidth, defaultDisplayHeight, displayDensity
+                )
+                freeformConfig.width = size.width
+                freeformConfig.height = size.height
+                updateMiniSize()
                 changeOrientation()
-                if (freeformConfig.isHangUp) toHangUp()
-                else makeSureFreeformInScreen()
+                if (freeformConfig.isHangUp) {
+                    toHangUp()
+                    if (isEdgeStashed) stashMiniToEdge()
+                } else {
+                    makeSureFreeformInScreen()
+                }
             }
-            measureScale()
-            LMOFreeformServiceHolder.resizeFreeform(
-                this@FreeformWindow,
-                freeformConfig.freeformWidth,
-                freeformConfig.freeformHeight,
-                freeformConfig.densityDpi
-            )
-            freeformView?.surfaceTexture?.setDefaultBufferSize(
-                freeformConfig.freeformWidth,
-                freeformConfig.freeformHeight
-            )
         }
     }
 
@@ -208,7 +216,7 @@ class FreeformWindow(
             flags = if (hasSecureWindowOnScreen) {
                 flags or WindowManager.LayoutParams.FLAG_SECURE
             } else {
-                flags xor WindowManager.LayoutParams.FLAG_SECURE
+                flags and WindowManager.LayoutParams.FLAG_SECURE.inv()
             }
         }
         handler.post {
@@ -251,18 +259,42 @@ class FreeformWindow(
     }
 
     fun measureSize() {
-        val isPortrait = defaultDisplayRotation == Surface.ROTATION_0 ||
-                defaultDisplayRotation == Surface.ROTATION_180
-        freeformConfig.apply {
-            height = (defaultDisplayHeight * (if (isPortrait) 0.4 else 0.7)).roundToInt()
-            width = if (isPortrait) {
-                (defaultDisplayWidth * 0.7).roundToInt()
-            } else {
-                // Landscape: increase width by 1.6x while preserving aspect ratio base
-                val baseWidth = defaultDisplayHeight * defaultDisplayHeight / defaultDisplayWidth
-                (baseWidth * 1.6).roundToInt()
-            }
-            dlog(TAG, "measureSize: isPortrait=$isPortrait width=$width height=$height")
+        val size = FreeformGeometry.initial(
+            defaultDisplayWidth, defaultDisplayHeight, displayDensity
+        )
+        freeformConfig.width = size.width
+        freeformConfig.height = size.height
+        updateMiniSize()
+        dlog(TAG, "measureSize: width=${size.width} height=${size.height}")
+    }
+
+    private fun updateMiniSize() {
+        val size = FreeformGeometry.mini(
+            FreeformGeometry.Size(freeformConfig.width, freeformConfig.height),
+            defaultDisplayWidth, defaultDisplayHeight, displayDensity
+        )
+        freeformConfig.hangUpWidth = size.width
+        freeformConfig.hangUpHeight = size.height
+    }
+
+    internal fun finishResize(size: FreeformGeometry.Size) {
+        freeformConfig.width = size.width
+        freeformConfig.height = size.height
+        updateMiniSize()
+        updateVirtualDisplaySize()
+        makeSureFreeformInScreen()
+    }
+
+    private fun updateVirtualDisplaySize() {
+        measureScale()
+        freeformView?.surfaceTexture?.setDefaultBufferSize(
+            freeformConfig.freeformWidth, freeformConfig.freeformHeight
+        )
+        if (displayId != Display.INVALID_DISPLAY) {
+            LMOFreeformServiceHolder.resizeFreeform(
+                this, freeformConfig.freeformWidth, freeformConfig.freeformHeight,
+                freeformConfig.densityDpi
+            )
         }
     }
 
@@ -310,6 +342,15 @@ class FreeformWindow(
         veilAppIconView.setImageDrawable(appIcon)
         appIconView.setImageDrawable(appIcon)
         packageNameView.text = appPackageName
+        // The title and app icon remain hidden in compact mode. Three original
+        // actions fit even in a narrow portrait window when the grip is tapped.
+        headerControls = listOf(pinView, maximizeView, minimizeView)
+        appIconView.visibility = View.GONE
+        packageNameView.visibility = View.GONE
+        headerControls.forEach { it.visibility = View.GONE }
+        topBarView?.let { bar ->
+            bar.layoutParams = bar.layoutParams.apply { height = dp(24) }
+        }
         minimizeView.setOnClickListener(LeftViewClickListener(this))
         maximizeView.setOnClickListener(MaximizeClickListener(this))
         pinView.setOnClickListener(PinClickListener(this))
@@ -329,6 +370,7 @@ class FreeformWindow(
         rootView.addView(view, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         windowParams.apply {
             type = WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+            gravity = Gravity.CENTER
             width = WindowManager.LayoutParams.WRAP_CONTENT
             height = WindowManager.LayoutParams.WRAP_CONTENT
             flags = WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
@@ -356,6 +398,20 @@ class FreeformWindow(
     /**
      * Called in system handler
      */
+    /** A tap on the unobtrusive header reveals the original window controls. */
+    internal fun toggleHeaderControls() {
+        if (freeformConfig.isHangUp) return
+        val bar = topBarView ?: return
+        headerControlsExpanded = !headerControlsExpanded
+        headerControls.forEach {
+            it.visibility = if (headerControlsExpanded) View.VISIBLE else View.GONE
+        }
+        bar.layoutParams = bar.layoutParams.apply {
+            height = dp(if (headerControlsExpanded) 42 else 24)
+        }
+        makeSureFreeformInScreen()
+    }
+
     @SuppressLint("ClickableViewAccessibility")
     fun handleHangUp() {
         val rootView = freeformRootView ?: return
@@ -365,31 +421,48 @@ class FreeformWindow(
         val view = freeformView ?: return
         
         if (freeformConfig.isHangUp) {
+            if (isEdgeStashed) {
+                restoreStashedMini()
+                return
+            }
             windowParams.apply {
                 x = freeformConfig.notInHangUpX
                 y = freeformConfig.notInHangUpY
                 flags = flags or WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM
             }
-            rootView.layoutParams.apply {
+            freeformConfig.isHangUp = false
+            rootView.layoutParams = rootView.layoutParams.apply {
                 width = freeformConfig.width
                 height = freeformConfig.height
             }
-            windowManager.updateViewLayout(layout, windowParams)
             topBar.visibility = View.VISIBLE
             bottomBar.visibility = View.VISIBLE
-            freeformConfig.isHangUp = false
+            windowManager.updateViewLayout(layout, windowParams)
+            makeSureFreeformInScreen()
             view.setOnTouchListener(this)
         } else {
             freeformConfig.notInHangUpX = windowParams.x
             freeformConfig.notInHangUpY = windowParams.y
-            toHangUp()
+            freeformConfig.isHangUp = true
+            isEdgeStashed = false
+            headerControlsExpanded = false
+            headerControls.forEach { it.visibility = View.GONE }
+            topBar.layoutParams = topBar.layoutParams.apply { height = dp(24) }
             topBar.visibility = View.GONE
             bottomBar.visibility = View.GONE
-            freeformConfig.isHangUp = true
+            toHangUp()
             val gestureDetector = GestureDetector(context, hangUpGestureListener)
             view.setOnTouchListener { _, event ->
                 gestureDetector.onTouchEvent(event)
-                if (event.action == MotionEvent.ACTION_UP) makeSureFreeformInScreen()
+                if (event.actionMasked == MotionEvent.ACTION_UP) {
+                    // A horizontal outward drag stashes the preview into a
+                    // narrow tappable edge; a normal tap restores the window.
+                    if (hangUpGestureListener.shouldStashAtEdge(event)) {
+                        handler.post { stashMiniToEdge() }
+                    } else {
+                        handler.post { makeSureFreeformInScreen() }
+                    }
+                }
                 true
             }
         }
@@ -405,35 +478,85 @@ class FreeformWindow(
         windowParams.apply {
             x = (defaultDisplayWidth / 2 - freeformConfig.hangUpWidth / 2)
             y = -(defaultDisplayHeight / 2 - freeformConfig.hangUpHeight / 2)
-            flags = flags xor WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM
+            flags = flags and WindowManager.LayoutParams.FLAG_ALT_FOCUSABLE_IM.inv()
         }
         rootView.layoutParams = rootView.layoutParams.apply {
             width = freeformConfig.hangUpWidth
             height = freeformConfig.hangUpHeight
         }
-        runCatching { windowManager.updateViewLayout(layout, windowParams) }.onFailure { Slog.e(TAG, "$it") }
+        val side = if (freeformConfig.notInHangUpX < 0) -1 else 1
+        val edgeX = (defaultDisplayWidth - freeformConfig.hangUpWidth) / 2 - dp(12)
+        windowParams.x = side * edgeX.coerceAtLeast(0)
+        windowParams.y = 0
+        makeSureFreeformInScreen()
+        runCatching { windowManager.updateViewLayout(layout, windowParams) }
+            .onFailure { Slog.e(TAG, "$it") }
+    }
+
+    /** Hide the mini preview at the edge, leaving a visible touch target. */
+    internal fun stashMiniToEdge() {
+        if (!freeformConfig.isHangUp) return
+        val layout = freeformLayout ?: return
+        val side = if (windowParams.x < 0) -1 else 1
+        val pos = FreeformGeometry.clampCenter(
+            0, windowParams.y,
+            freeformConfig.hangUpWidth, freeformConfig.hangUpHeight,
+            defaultDisplayWidth, defaultDisplayHeight, displayDensity
+        )
+        isEdgeStashed = true
+        windowParams.x = FreeformGeometry.stashedX(
+            defaultDisplayWidth, freeformConfig.hangUpWidth, side, dp(24)
+        )
+        windowParams.y = pos.y
+        runCatching { windowManager.updateViewLayout(layout, windowParams) }
+            .onFailure { Slog.e(TAG, "stashMiniToEdge failed", it) }
+    }
+
+    /** First tap on the edge reveals the mini preview; next tap restores the app. */
+    internal fun restoreStashedMini() {
+        if (!isEdgeStashed || !freeformConfig.isHangUp) return
+        val layout = freeformLayout ?: return
+        val side = if (windowParams.x < 0) -1 else 1
+        isEdgeStashed = false
+        val safeX = (defaultDisplayWidth - freeformConfig.hangUpWidth) / 2 - dp(8)
+        windowParams.x = side * safeX.coerceAtLeast(0)
+        clampWindowPosition()
+        runCatching { windowManager.updateViewLayout(layout, windowParams) }
+            .onFailure { Slog.e(TAG, "restoreStashedMini failed", it) }
+    }
+
+    /**
+     * Keep the decorated window within the display throughout move/resize gestures,
+     * not just when the user lifts their finger. Coordinates are Gravity.CENTER offsets.
+     * The dimensions are the displayed texture dimensions, not the virtual display size.
+     */
+    internal fun clampWindowPosition(
+        width: Int = if (freeformConfig.isHangUp) freeformConfig.hangUpWidth
+                     else freeformConfig.width,
+        height: Int = if (freeformConfig.isHangUp) freeformConfig.hangUpHeight
+                      else freeformConfig.height,
+    ): Boolean {
+        if (isEdgeStashed) return false // Preserve an intentionally off-screen edge handle.
+        val bars = if (freeformConfig.isHangUp) 0 else dp(if (headerControlsExpanded) 58 else 40)
+        val pos = FreeformGeometry.clampCenter(
+            windowParams.x, windowParams.y, width, height + bars,
+            defaultDisplayWidth, defaultDisplayHeight, displayDensity
+        )
+        if (pos.x == windowParams.x && pos.y == windowParams.y) return false
+        windowParams.x = pos.x
+        windowParams.y = pos.y
+        return true
     }
 
     /**
      * Called in uiHandler
      */
     fun makeSureFreeformInScreen() {
-        val rootView = freeformRootView ?: return
-        
-        if (!freeformConfig.isHangUp) {
-            val maxWidth = defaultDisplayWidth
-            val maxHeight = (defaultDisplayHeight * 0.9).roundToInt()
-            if (rootView.layoutParams.width > maxWidth || rootView.layoutParams.height > maxHeight) {
-                rootView.layoutParams = rootView.layoutParams.apply {
-                    width = min(rootView.width, maxWidth)
-                    height = min(rootView.height, maxHeight)
-                }
-            }
+        val layout = freeformLayout ?: return
+        if (clampWindowPosition()) {
+            runCatching { windowManager.updateViewLayout(layout, windowParams) }
+                .onFailure { Slog.e(TAG, "clamp freeform failed", it) }
         }
-        if (windowParams.x < -(defaultDisplayWidth / 2)) FreeformAnimation.moveInScreenAnimator(windowParams.x, -(defaultDisplayWidth / 2), 300, true, this)
-        else if (windowParams.x > (defaultDisplayWidth / 2)) FreeformAnimation.moveInScreenAnimator(windowParams.x, (defaultDisplayWidth / 2), 300, true, this)
-        if (windowParams.y < -(defaultDisplayHeight / 2)) FreeformAnimation.moveInScreenAnimator(windowParams.y, -(defaultDisplayHeight / 2), 300, false, this)
-        else if (windowParams.y > (defaultDisplayHeight / 2)) FreeformAnimation.moveInScreenAnimator(windowParams.y, (defaultDisplayHeight / 2), 300, false, this)
     }
 
     /**
@@ -442,11 +565,12 @@ class FreeformWindow(
      */
     fun changeOrientation() {
         val rootView = freeformRootView ?: return
-        
         rootView.layoutParams = rootView.layoutParams.apply {
             width = if (freeformConfig.isHangUp) freeformConfig.hangUpWidth else freeformConfig.width
             height = if (freeformConfig.isHangUp) freeformConfig.hangUpHeight else freeformConfig.height
         }
+        updateVirtualDisplaySize()
+        makeSureFreeformInScreen()
     }
 
     fun getFreeformId(): String {

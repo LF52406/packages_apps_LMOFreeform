@@ -18,3 +18,14 @@ but WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 ```
+
+## Android 17 / MistOS integration
+
+This module implements virtual-display-backed floating **application windows**,
+including resizing, window chrome, and edge-stashed mini-window gestures.
+
+Related SystemUI control-center transient popup/media fixes are maintained in
+[frameworks_base_qpr2](https://github.com/LF52406/frameworks_base_qpr2/commit/cb25db56e6ba74f0547a2ce51a7858cf09bf89bd).
+That commit handles independent SystemUI media and popup overlays, **not**
+LMOFreeform virtual display window geometry. It is **not** a source-level
+build prerequisite for this module.
